@@ -1,0 +1,40 @@
+{
+  "include": [
+    "semiconductor",
+    "chip",
+    "foundry",
+    "TSMC",
+    "Samsung Foundry",
+    "Intel",
+    "ASML",
+    "Applied Materials",
+    "Lam Research",
+    "KLA",
+    "Micron",
+    "export control",
+    "sanctions",
+    "HBM",
+    "EUV",
+    "lithography",
+    "substrate",
+    "photoresist",
+    "wafer",
+    "OSAT",
+    "JCET",
+    "ASE",
+    "Amkor",
+    "supply chain disruption",
+    "factory shutdown",
+    "earthquake Taiwan",
+    "geopolitical risk",
+    "US China chip",
+    "tariff",
+    "export ban",
+    "materials shortage"
+  ],
+  "exclude": [
+    "rumor",
+    "opinion",
+    "sponsored"
+  ]
+}

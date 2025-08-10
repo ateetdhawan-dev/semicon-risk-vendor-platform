@@ -1,0 +1,6 @@
+{
+  "google_news_rss_templates": [
+    "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+  ],
+  "direct_feeds": []
+}
