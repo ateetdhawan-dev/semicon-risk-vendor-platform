@@ -1,40 +1,15 @@
 {
-  "include": [
-    "semiconductor",
-    "chip",
-    "foundry",
-    "TSMC",
-    "Samsung Foundry",
-    "Intel",
-    "ASML",
-    "Applied Materials",
-    "Lam Research",
-    "KLA",
-    "Micron",
-    "export control",
-    "sanctions",
-    "HBM",
-    "EUV",
-    "lithography",
-    "substrate",
-    "photoresist",
-    "wafer",
-    "OSAT",
-    "JCET",
-    "ASE",
-    "Amkor",
-    "supply chain disruption",
-    "factory shutdown",
-    "earthquake Taiwan",
-    "geopolitical risk",
-    "US China chip",
-    "tariff",
-    "export ban",
-    "materials shortage"
+  "Geopolitical": [
+    "export ban", "trade war", "tariff", "sanction", "restriction",
+    "China", "US", "Taiwan", "EU", "geopolitical", "conflict", "policy change"
   ],
-  "exclude": [
-    "rumor",
-    "opinion",
-    "sponsored"
+  "Vendor": [
+    "vendor", "supplier", "manufacturer", "partnership", "acquisition",
+    "merger", "deal", "contract", "TSMC", "Intel", "ASML", "Lam Research",
+    "Samsung", "Micron", "NVIDIA", "AMD"
+  ],
+  "Material": [
+    "raw material", "wafer", "lithography", "etching", "photoresist",
+    "substrate", "silicon", "copper", "aluminium", "rare earth"
   ]
 }
