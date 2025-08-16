@@ -1,0 +1,39 @@
+{
+  "geopolitical": [
+    "sanction","export control","export ban","blacklist","entity list","embargo","tariff","duties",
+    "geopolitic","trade war","retaliation","boycott","visa restriction","national security"
+  ],
+  "material": [
+    "gallium","germanium","neon","argon","helium","photoresist","palladium","copper foil","silicon wafer",
+    "substrate shortage","rare earth","chemicals supply","etch gas","CMP slurry","resist shortage"
+  ],
+  "vendor": [
+    "supply issue","shipment delay","component shortage","backlog","lead time","order cut","capacity constraint",
+    "recall","rma","field return","quality issue","defect rate","yield loss"
+  ],
+  "logistics": [
+    "port","shipping","freight","customs","container","red sea","bab el-mandeb","suez","panama canal","logistics","warehouse"
+  ],
+  "financial": [
+    "profit warning","guidance cut","revenue drop","downgrade","liquidity","bankruptcy","chapter 11",
+    "capital raise","secondary offering","stock plunges","margin compression","write-down","impairment"
+  ],
+  "regulatory": [
+    "regulator","antitrust","competition authority","doj","ftc","ec investigation","compliance","consent decree",
+    "itar","bis","export administration","license required","fine","penalty","consent order"
+  ],
+  "cybersecurity": [
+    "breach","ransomware","ddos","data leak","intrusion","security incident","malware","phishing"
+  ],
+  "workforce": [
+    "strike","walkout","picket","union","layoff","hiring freeze","labor dispute","workers protest"
+  ],
+  "environmental": [
+    "earthquake","quake","flood","typhoon","cyclone","hurricane","wildfire","fire at","smoke","evacuation",
+    "drought","heat wave","power outage","blackout"
+  ],
+  "capacity": [
+    "fab outage","tool down","line down","shutdown","halt production","downtime","utilization","capacity expansion",
+    "ramp","debottleneck","equipment installation"
+  ]
+}

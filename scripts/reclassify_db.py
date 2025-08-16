@@ -1,8 +1,5 @@
-import hashlib, json, sqlite3, re, csv
-from datetime import datetime, timezone
+import sqlite3, json, re, csv
 from pathlib import Path
-import feedparser
-from dateutil import parser as dtp
 
 DB = "data/news.db"
 CFG = Path("config")
@@ -24,6 +21,7 @@ def load_aliases():
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
 def load_risks():
+    # list
     risks = ["geopolitical","material","vendor","logistics","financial","regulatory","cybersecurity","workforce","environmental","capacity","unclassified"]
     rt_file = CFG / "risk_types.json"
     if rt_file.exists():
@@ -33,6 +31,7 @@ def load_risks():
             if xs: risks = xs
         except Exception:
             pass
+    # keywords per risk
     rk_file = CFG / "risk_keywords.json"
     risk_kw = json.loads(rk_file.read_text(encoding="utf-8")) if rk_file.exists() else {}
     return risks, risk_kw
@@ -60,14 +59,12 @@ def mk_risk_patterns(risk_kw):
         rpat[r] = re.compile("|".join(re.escape(k) for k in kws), re.IGNORECASE)
     return rpat
 
-def hash_id(s:str)->str:
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
-
 def classify(title, summary, v_pats, r_pats, risk_list):
     text = f"{title or ''} {summary or ''}"
     vendors = [c for c,pat in v_pats.items() if pat.search(text)]
     risks = [r for r,pat in r_pats.items() if pat.search(text)]
 
+    # Heuristic boosts (simple phrases)
     low = text.lower()
     if "tariff" in low or "export control" in low or "sanction" in low or "embargo" in low:
         if "geopolitical" in risk_list and "geopolitical" not in risks: risks.append("geopolitical")
@@ -77,6 +74,7 @@ def classify(title, summary, v_pats, r_pats, risk_list):
     if any(w in low for w in ["strike","walkout","layoff"]):
         if "workforce" in risk_list and "workforce" not in risks: risks.append("workforce")
 
+    # Defaults
     if vendors and not risks and "vendor" in risk_list:
         risks.append("vendor")
     if not risks and "unclassified" in risk_list:
@@ -86,73 +84,25 @@ def classify(title, summary, v_pats, r_pats, risk_list):
     risks   = list(dict.fromkeys(risks))
     return ", ".join(vendors), ", ".join(risks)
 
-def ensure_schema():
-    con = sqlite3.connect(DB)
-    cur = con.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS news_events (
-      hash_id TEXT PRIMARY KEY,
-      published_at TEXT,
-      title TEXT,
-      source TEXT,
-      link TEXT,
-      summary TEXT,
-      vendor_matches TEXT,
-      risk_type TEXT
-    )""")
-    cur.execute("DROP VIEW IF EXISTS news")
-    cur.execute("""
-    CREATE VIEW news AS
-    SELECT
-      hash_id AS id,
-      published_at AS date_utc,
-      title, source, link, summary,
-      COALESCE(vendor_matches,'') AS matched_keywords,
-      COALESCE(risk_type,'')      AS risk_types
-    FROM news_events
-    """)
-    con.commit()
-    con.close()
-
-def ingest():
-    ensure_schema()
+def reclassify():
     canon = load_vendors()
     aliases = load_aliases()
     risk_list, risk_kw = load_risks()
     v_pats = mk_vendor_patterns(canon, aliases)
     r_pats = mk_risk_patterns(risk_kw)
 
-    try:
-        cfg = json.loads((Path("config")/"news_sources.json").read_text(encoding="utf-8"))
-        sources = cfg.get("google_news_rss", [])
-    except Exception:
-        sources = []
-
     con = sqlite3.connect(DB)
     cur = con.cursor()
-
-    for url in sources:
-        feed = feedparser.parse(url)
-        for e in feed.entries:
-            title = (e.get("title","") or "").strip()
-            link  = (e.get("link","")  or "").strip()
-            source = (e.get("source",{}) or {}).get("title","") or e.get("author","") or "Google News"
-            summary = re.sub(r"<[^>]+>", "", e.get("summary","") or "").strip()
-            try:
-                published_at = dtp.parse(e.get("published","")).astimezone(timezone.utc).isoformat()
-            except Exception:
-                published_at = datetime.now(timezone.utc).isoformat()
-
-            vm, rk = classify(title, summary, v_pats, r_pats, risk_list)
-            hid = hash_id(title + link)
-
-            cur.execute("""
-            INSERT OR IGNORE INTO news_events
-            (hash_id, published_at, title, source, link, summary, vendor_matches, risk_type)
-            VALUES (?,?,?,?,?,?,?,?)
-            """, (hid, published_at, title, source, link, summary, vm, rk))
+    cur.execute("SELECT hash_id, title, summary FROM news_events")
+    rows = cur.fetchall()
+    updated = 0
+    for hid, title, summary in rows:
+        vm, rk = classify(title, summary, v_pats, r_pats, risk_list)
+        cur.execute("UPDATE news_events SET vendor_matches=?, risk_type=? WHERE hash_id=?", (vm, rk, hid))
+        updated += 1
     con.commit()
     con.close()
-    print("[OK] Ingest complete with robust risk mapping.")
+    print(f"[OK] Reclassified {updated} rows. No article left without a risk (uses 'unclassified' as last resort).")
+
 if __name__ == "__main__":
-    ingest()
+    reclassify()

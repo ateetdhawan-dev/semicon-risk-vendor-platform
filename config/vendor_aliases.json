@@ -1,0 +1,12 @@
+{
+  "AMD": ["Advanced Micro Devices", "AMD"],
+  "TSMC": ["Taiwan Semiconductor", "Taiwan Semiconductor Manufacturing Company", "TSMC"],
+  "ASML": ["ASML Holding", "ASML"],
+  "Applied Materials": ["Applied Materials", "AMAT"],
+  "Lam Research": ["LAM Research", "LRCX"],
+  "Nvidia": ["NVIDIA", "NVDA"],
+  "Intel": ["Intel Corporation", "INTC"],
+  "Micron": ["Micron Technology", "MU"],
+  "KLA": ["KLA Corporation", "KLA-Tencor", "KLAC"],
+  "Tokyo Electron": ["TEL", "Tokyo Electron Limited"]
+}
