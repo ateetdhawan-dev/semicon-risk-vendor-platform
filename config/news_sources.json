@@ -1,10 +1,6 @@
 {
-  "feeds": [
-    "https://news.google.com/rss/search?q=semiconductor%20supply%20chain&hl=en-US&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=chip%20export%20ban&hl=en-US&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=TSMC&hl=en-US&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=ASML&hl=en-US&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=Lam%20Research&hl=en-US&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=NVIDIA%20supply%20chain&hl=en-US&gl=US&ceid=US:en"
+  "google_news_rss": [
+    "https://news.google.com/rss/search?q=semiconductor&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=chip+shortage&hl=en-US&gl=US&ceid=US:en"
   ]
 }
