@@ -9,25 +9,13 @@ from datetime import date
 
 st.set_page_config(page_title="Commercial KPIs", page_icon="📈")
 
-# =========================
-# Helpers
-# =========================
-def _col_in(df, names):
-    """Return first existing column (case-insensitive match) or None."""
-    lower = {c.lower(): c for c in df.columns}
-    for n in names:
-        if n.lower() in lower:
-            return lower[n.lower()]
-    return None
-
+# ----------------- Helpers -----------------
 def parse_numeric(x):
-    """Turn '1,400,000' or '39' into float; return NaN if not parseable."""
     if x is None:
         return np.nan
     s = str(x).strip()
-    if s == "":
+    if not s:
         return np.nan
-    # extract first number (supports 1,234.56)
     m = re.search(r"[+-]?\d[\d,]*(?:\.\d+)?", s.replace("\u00A0"," "))
     if not m:
         return np.nan
@@ -37,10 +25,8 @@ def parse_numeric(x):
         return np.nan
 
 def format_value(val, unit):
-    """Pretty-print number with unit."""
     if val is None or (isinstance(val, float) and math.isnan(val)):
         return "—"
-    # compact big numbers
     absval = abs(val)
     if absval >= 1_000_000_000:
         s = f"{val/1_000_000_000:.2f}B"
@@ -52,269 +38,295 @@ def format_value(val, unit):
         s = f"{val:.2f}"
     return f"{s} {unit}".strip()
 
-def normalize_by_kpi(matrix_df):
-    """Per-KPI (column-wise) min-max normalization to [0,1], keeping NaNs."""
-    norm = matrix_df.copy()
-    for col in norm.columns:
-        col_vals = norm[col].astype(float)
-        vmin = np.nanmin(col_vals.values) if not np.isnan(col_vals.values).all() else np.nan
-        vmax = np.nanmax(col_vals.values) if not np.isnan(col_vals.values).all() else np.nan
-        if vmin == vmax or np.isnan(vmin) or np.isnan(vmax):
-            # all equal or all NaN -> set to 0.5 so it renders neutral
-            norm[col] = 0.5
-        else:
-            norm[col] = (col_vals - vmin) / (vmax - vmin)
-    return norm
+def normalize(values: pd.Series, method: str = "minmax"):
+    arr = values.astype(float)
+    if method == "zscore":
+        mu = np.nanmean(arr)
+        sd = np.nanstd(arr)
+        if sd == 0 or np.isnan(sd):
+            return pd.Series(np.full_like(arr, 0.0), index=values.index)
+        return (arr - mu) / sd
+    # minmax
+    vmin = np.nanmin(arr) if not np.isnan(arr).all() else np.nan
+    vmax = np.nanmax(arr) if not np.isnan(arr).all() else np.nan
+    if vmin == vmax or np.isnan(vmin) or np.isnan(vmax):
+        return pd.Series(np.full_like(arr, 0.5), index=values.index)
+    return (arr - vmin) / (vmax - vmin)
 
-# =========================
-# Load & normalize
-# =========================
+# ----------------- Loaders -----------------
+@st.cache_data
+def load_taxonomy():
+    path = "config/kpi_taxonomy.csv"
+    if not os.path.exists(path):
+        # default minimal taxonomy
+        return pd.DataFrame({
+            "kpi": ["Revenue TTM","Backlog","Installed base","Wafer starts","Lead time","Gross Margin %","Process node"],
+            "category": ["Financial","Orders","Scale","Manufacturing","Supply","Profitability","Technology"],
+            "preferred_unit": ["billion USD","billion USD","tools","wafer/month","weeks","percent","node"],
+            "direction": ["higher_good","higher_good","higher_good","higher_good","lower_good","higher_good","higher_good"],
+            "description": ["" for _ in range(7)]
+        })
+    return pd.read_csv(path)
+
 @st.cache_data
 def load_kpis():
-    path = "config/kpis.csv"
-    if not os.path.exists(path):
-        # empty scaffold
-        return pd.DataFrame(columns=["vendor","kpi","value","unit","date"])
-
-    df = pd.read_csv(path)
-
-    # Try to map flexible column names
-    vendor_col = _col_in(df, ["vendor", "company", "supplier"])
-    kpi_col    = _col_in(df, ["kpi", "metric", "name"])
-    value_col  = _col_in(df, ["value", "amount", "val"])
-    unit_col   = _col_in(df, ["unit", "units"])
-    date_col   = _col_in(df, ["date", "as_of", "period_end", "period"])
-
-    # Ensure all present in the working frame
-    out = pd.DataFrame()
-    out["vendor"] = df[vendor_col].astype(str) if vendor_col else ""
-    out["kpi"]    = df[kpi_col].astype(str)    if kpi_col    else ""
-    out["unit"]   = df[unit_col].astype(str)   if unit_col   else ""
-
-    # numeric value (parse if needed)
-    if value_col:
-        out["value"] = df[value_col].apply(parse_numeric).astype(float)
+    # Prefer v2 if exists
+    p2 = "config/kpis_v2.csv"
+    p1 = "config/kpis.csv"
+    if os.path.exists(p2):
+        df = pd.read_csv(p2)
+    elif os.path.exists(p1):
+        df = pd.read_csv(p1)
     else:
-        out["value"] = np.nan
+        return pd.DataFrame(columns=["vendor","kpi","value","unit","currency","as_of","source","notes"])
 
-    # date (optional)
-    if date_col:
-        out["date"] = pd.to_datetime(df[date_col], errors="coerce")
-    else:
-        out["date"] = pd.NaT
+    # Ensure columns exist
+    for col in ["vendor","kpi","value","unit","currency","as_of","source","notes"]:
+        if col not in df.columns:
+            df[col] = ""
 
-    # Clean blanks
-    out["vendor"] = out["vendor"].fillna("").str.strip()
-    out["kpi"]    = out["kpi"].fillna("").str.strip()
-    out["unit"]   = out["unit"].fillna("").str.strip()
+    # Normalize
+    df["vendor"] = df["vendor"].astype(str).str.strip()
+    df["kpi"]    = df["kpi"].astype(str).str.strip()
+    df["unit"]   = df["unit"].astype(str).str.strip()
+    df["currency"] = df["currency"].astype(str).str.strip()
+    df["source"] = df["source"].astype(str).str.strip()
+    df["notes"]  = df["notes"].astype(str).str.strip()
+    df["value"]  = df["value"].apply(parse_numeric).astype(float)
+    df["as_of"]  = pd.to_datetime(df["as_of"], errors="coerce")
 
-    # Drop rows with no vendor or KPI
-    out = out[(out["vendor"] != "") & (out["kpi"] != "")]
-    return out
+    # Drop empties
+    df = df[(df["vendor"]!="") & (df["kpi"]!="")]
+    return df
 
-df = load_kpis()
+# ----------------- Data prep -----------------
+tax = load_taxonomy()
+df  = load_kpis()
 
-st.title("📈 Commercial KPI Dashboard")
+st.title("📈 Commercial KPI Intelligence")
 
 if df.empty:
-    st.info("No KPI data found. Please populate `config/kpis.csv` with columns like: vendor,kpi,value,unit,date.")
+    st.info("No KPI data found. Please populate `config/kpis_v2.csv` (preferred) or `config/kpis.csv`.")
     st.stop()
 
-# =========================
-# Filters
-# =========================
-all_vendors = sorted([v for v in df["vendor"].dropna().unique() if str(v).strip()])
-all_kpis    = sorted([k for k in df["kpi"].dropna().unique() if str(k).strip()])
+# Join taxonomy to get category + direction
+tax_small = tax[["kpi","category","preferred_unit","direction"]].drop_duplicates()
+df = df.merge(tax_small, on="kpi", how="left")
 
-c1, c2, c3 = st.columns([2, 2, 2])
+# ----------------- Filters -----------------
+all_vendors = sorted(df["vendor"].dropna().unique())
+all_kpis    = sorted(df["kpi"].dropna().unique())
+all_cats    = sorted([x for x in df["category"].dropna().unique() if str(x).strip()])
+
+c1, c2, c3 = st.columns([2,2,2])
 with c1:
-    sel_vendors = st.multiselect("Vendors", all_vendors, default=all_vendors[: min(5, len(all_vendors))])
+    sel_vendors = st.multiselect("Vendors", all_vendors, default=all_vendors[:min(6,len(all_vendors))])
 with c2:
-    sel_kpis = st.multiselect("KPIs", all_kpis, default=all_kpis[: min(5, len(all_kpis))])
+    sel_categories = st.multiselect("Categories", all_cats, default=all_cats)
 with c3:
-    has_dates = df["date"].notna().any()
-    if has_dates:
-        dmin, dmax = df["date"].min().date(), df["date"].max().date()
-        date_range = st.date_input("Date range", value=(dmin, dmax), min_value=dmin, max_value=dmax)
+    # choose normalization
+    norm_method = st.selectbox("Normalization", ["minmax","zscore"], index=0)
+
+# Date filter row
+c4, c5 = st.columns([2,2])
+with c4:
+    # KPI picker limited by chosen categories
+    kpi_pool = sorted(df[df["category"].isin(sel_categories)]["kpi"].dropna().unique()) if sel_categories else all_kpis
+    sel_kpis = st.multiselect("KPIs", kpi_pool, default=kpi_pool[:min(8,len(kpi_pool))])
+with c5:
+    if df["as_of"].notna().any():
+        dmin, dmax = df["as_of"].min().date(), df["as_of"].max().date()
+        date_range = st.date_input("As-of range", (dmin, dmax), min_value=dmin, max_value=dmax)
     else:
         date_range = None
 
 flt = df.copy()
 if sel_vendors:
     flt = flt[flt["vendor"].isin(sel_vendors)]
+if sel_categories:
+    flt = flt[flt["category"].isin(sel_categories)]
 if sel_kpis:
     flt = flt[flt["kpi"].isin(sel_kpis)]
-if date_range and isinstance(date_range, tuple) and len(date_range) == 2:
+if date_range and isinstance(date_range, tuple) and len(date_range)==2:
     start_d, end_d = date_range
-    flt = flt[(flt["date"].dt.date >= start_d) & (flt["date"].dt.date <= end_d)]
+    flt = flt[(flt["as_of"].dt.date>=start_d) & (flt["as_of"].dt.date<=end_d)]
 
-st.caption(f"{len(flt)} rows after filters")
+st.caption(f"{len(flt)} records after filters")
 
-# =========================
-# Overview cards (latest per vendor/KPI)
-# =========================
-colA, colB, colC = st.columns(3)
-latest_any_date = flt[flt["date"].notna()]
-latest_count = 0
-if not latest_any_date.empty:
-    latest_count = latest_any_date.sort_values("date").groupby(["vendor","kpi"]).tail(1).shape[0]
+# ----------------- Overview cards -----------------
+latest = flt.copy()
+if latest["as_of"].notna().any():
+    latest = latest.sort_values("as_of").groupby(["vendor","kpi"], as_index=False).tail(1)
+else:
+    latest = latest.groupby(["vendor","kpi"], as_index=False).agg({"value":"mean","unit":"first","category":"first","direction":"first"})
 
-with colA:
-    st.metric("Vendors", value=len(set(flt["vendor"])))
-with colB:
-    st.metric("KPIs", value=len(set(flt["kpi"])))
-with colC:
-    st.metric("Latest points", value=int(latest_count))
+cA,cB,cC,cD = st.columns(4)
+with cA: st.metric("Vendors", len(set(flt["vendor"])))
+with cB: st.metric("KPIs", len(set(flt["kpi"])))
+with cC: st.metric("Latest Points", int(latest.shape[0]))
+with cD:
+    if flt["as_of"].notna().any():
+        recency_days = (pd.Timestamp(date.today()) - flt["as_of"].max()).days
+        st.metric("Data recency (days)", int(recency_days))
+    else:
+        st.metric("Data recency (days)", "—")
 
 st.divider()
 
-# =========================
-# Tabs
-# =========================
-tab1, tab2, tab3 = st.tabs(["📋 Table", "📉 Trends", "🗺️ Heatmap"])
+# ----------------- Tabs -----------------
+tab1, tab2, tab3, tab4 = st.tabs(["📋 Explorer","📉 Trends","🗺️ Advanced Heatmap","🧩 Coverage"])
 
-# ---- Table ----
+# ---- Explorer ----
 with tab1:
-    # Present friendly value+unit
     view = flt.copy()
-    view["value_display"] = [format_value(v, u) for v, u in zip(view["value"], view["unit"])]
-    # Reorder columns for readability
-    cols = ["vendor","kpi","value_display","value","unit","date"]
+    view["value_display"] = [format_value(v,u) for v,u in zip(view["value"], view["unit"])]
+    cols = ["vendor","category","kpi","value_display","value","unit","currency","as_of","source","notes"]
     cols = [c for c in cols if c in view.columns]
-    view = view[cols]
-    # Sort if possible
-    sort_cols = [c for c in ["vendor","kpi","date"] if c in view.columns]
-    if sort_cols:
-        try:
-            view = view.sort_values(sort_cols)
-        except Exception:
-            pass
-    st.dataframe(view, width="stretch", height=420)
+    # sort for readability
+    if "as_of" in view.columns:
+        view = view.sort_values(["vendor","category","kpi","as_of"])
+    st.dataframe(view[cols], width="stretch", height=450)
 
 # ---- Trends ----
 with tab2:
-    if flt.empty:
-        st.info("No data to chart.")
-    else:
-        # Choose one KPI (or All) and one Vendor (or All)
-        t1, t2 = st.columns(2)
+    if not flt.empty and flt["as_of"].notna().any():
+        t1,t2 = st.columns([2,2])
         with t1:
-            kpi_pick = st.selectbox("KPI for trends", ["(All)"] + all_kpis, index=0)
+            trend_vendor = st.selectbox("Vendor", ["(All)"] + sel_vendors if sel_vendors else ["(All)"] + all_vendors)
         with t2:
-            vendor_pick = st.selectbox("Vendor for trends", ["(All)"] + all_vendors, index=0)
+            trend_kpi = st.selectbox("KPI", ["(All)"] + sel_kpis if sel_kpis else ["(All)"])
 
-        trend = flt.copy()
-        if kpi_pick != "(All)":
-            trend = trend[trend["kpi"] == kpi_pick]
-        if vendor_pick != "(All)":
-            trend = trend[trend["vendor"] == vendor_pick]
+        data = flt.copy()
+        if trend_vendor != "(All)":
+            data = data[data["vendor"]==trend_vendor]
+        if trend_kpi != "(All)":
+            data = data[data["kpi"]==trend_kpi]
 
-        # if no dates, show latest bar by vendor/kpi
-        if trend["date"].notna().any():
-            trend = trend.dropna(subset=["date"])
-            if trend.empty:
-                st.info("No dated values to plot.")
-            else:
-                # Build series label and pivot
-                trend = trend.sort_values("date")
-                trend["series"] = trend["vendor"] + " · " + trend["kpi"]
-                piv = trend.pivot_table(index="date", columns="series", values="value", aggfunc="mean").sort_index()
-                if piv.empty:
-                    st.info("Nothing to plot.")
-                else:
-                    fig, ax = plt.subplots(figsize=(9, 4), dpi=140)
-                    for col in piv.columns:
-                        ax.plot(piv.index, piv[col], label=str(col))
-                    ax.set_xlabel("Date")
-                    ax.set_ylabel("Value")
-                    ax.set_title("KPI Trends")
-                    if len(piv.columns) <= 10:
-                        ax.legend(loc="best", fontsize=8)
-                    ax.grid(True, alpha=0.3)
-                    st.pyplot(fig)
+        if data.empty:
+            st.info("No data to plot for this selection.")
         else:
-            # No dates at all → bar of latest/mean by vendor & KPI
-            latest = trend.copy()
-            if "date" in latest.columns and latest["date"].notna().any():
-                latest = latest.sort_values("date").groupby(["vendor","kpi"], as_index=False).tail(1)
+            data = data.dropna(subset=["as_of"]).sort_values("as_of")
+            data["series"] = data["vendor"] + " · " + data["kpi"]
+            piv = data.pivot_table(index="as_of", columns="series", values="value", aggfunc="mean").sort_index()
+            if piv.empty:
+                st.info("Nothing to plot.")
             else:
-                latest = latest.groupby(["vendor","kpi"], as_index=False)["value"].mean()
-            if latest.empty:
-                st.info("No values to plot.")
-            else:
-                bar = latest.pivot_table(index="vendor", columns="kpi", values="value", aggfunc="mean")
-                st.bar_chart(bar)
-
-# ---- Heatmap ----
-with tab3:
-    if flt.empty:
-        st.info("No data to display.")
+                fig, ax = plt.subplots(figsize=(9,4), dpi=140)
+                for col in piv.columns:
+                    ax.plot(piv.index, piv[col], label=str(col))
+                ax.set_title("KPI Trends")
+                ax.set_xlabel("As of date")
+                ax.set_ylabel("Value")
+                if len(piv.columns) <= 10:
+                    ax.legend(loc="best", fontsize=8)
+                ax.grid(True, alpha=0.3)
+                st.pyplot(fig)
     else:
-        # Let user choose 'Latest by date' vs 'Average'
-        agg_choice = st.radio(
-            "Heatmap aggregation",
-            ["Latest by date (if any)", "Average"],
-            index=0,
-            horizontal=True,
-        )
+        st.info("No dated series available. Add `as_of` dates to see trends.")
 
-        work = flt.copy()
-        # For annotations, we also want units. We'll create two matrices:
-        #   values_matrix: numeric values
-        #   text_matrix:   formatted value + unit for display
-        if agg_choice.startswith("Latest") and work["date"].notna().any():
-            work = work.sort_values("date").dropna(subset=["date"])
-            latest = work.groupby(["vendor","kpi"], as_index=False).tail(1)
-            values_matrix = latest.pivot_table(index="vendor", columns="kpi", values="value", aggfunc="mean")
-            # Build matching text matrix (value + unit)
-            latest["val_txt"] = [format_value(v, u) for v,u in zip(latest["value"], latest["unit"])]
-            text_matrix = latest.pivot_table(index="vendor", columns="kpi", values="val_txt", aggfunc=lambda x: x.iloc[0] if len(x)>0 else "")
-            title = "Heatmap (Latest values)"
+# ---- Advanced Heatmap ----
+with tab3:
+    # Aggregate: latest by date if present, else mean
+    agg = flt.copy()
+    by = ["vendor","kpi","category","direction","unit"]
+    if agg["as_of"].notna().any():
+        agg = agg.sort_values("as_of").groupby(by, as_index=False).tail(1)
+    else:
+        agg = agg.groupby(by, as_index=False).agg({"value":"mean"})
+
+    if agg.empty:
+        st.info("No values to display.")
+    else:
+        # Normalize per KPI with direction
+        # Build matrix vendor x KPI (values)
+        mat = agg.pivot_table(index="vendor", columns="kpi", values="value", aggfunc="mean")
+        # Keep units for annotations: choose most common per vendor/kpi
+        units = agg.groupby(["vendor","kpi"])["unit"].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else "").reset_index()
+        units_mat = units.pivot(index="vendor", columns="kpi", values="unit").reindex(index=mat.index, columns=mat.columns)
+
+        # Direction-aware normalization per KPI
+        norm_cols = {}
+        for k in mat.columns:
+            col = mat[k]
+            col_norm = normalize(col, method=norm_method)
+            # direction: if lower_good, invert
+            dir_k = agg[agg["kpi"]==k]["direction"].dropna().unique()
+            if len(dir_k) and dir_k[0].lower().startswith("lower"):
+                col_norm = 1 - col_norm
+            norm_cols[k] = col_norm
+        norm_mat = pd.DataFrame(norm_cols, index=mat.index)
+
+        # Prepare annotation text: value + unit
+        text_mat = pd.DataFrame(index=mat.index, columns=mat.columns)
+        for i in mat.index:
+            for j in mat.columns:
+                v = mat.loc[i,j]
+                u = units_mat.loc[i,j] if (i in units_mat.index and j in units_mat.columns) else ""
+                text_mat.loc[i,j] = format_value(v,u) if pd.notna(v) else ""
+
+        if norm_mat.empty:
+            st.info("No values to display.")
         else:
-            # Average over filters
-            values_matrix = work.pivot_table(index="vendor", columns="kpi", values="value", aggfunc="mean")
-            # Build unit-aware text by taking the most common unit for each (vendor,kpi)
-            unit_pick = work.groupby(["vendor","kpi"])["unit"].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else "")
-            unit_pick = unit_pick.reset_index().rename(columns={"unit":"_unit"})
-            mean_with_u = work.groupby(["vendor","kpi"], as_index=False)["value"].mean().merge(unit_pick, on=["vendor","kpi"], how="left")
-            mean_with_u["val_txt"] = [format_value(v, u) for v,u in zip(mean_with_u["value"], mean_with_u["_unit"])]
-            text_matrix = mean_with_u.pivot_table(index="vendor", columns="kpi", values="val_txt", aggfunc=lambda x: x.iloc[0] if len(x)>0 else "")
-            title = "Heatmap (Average values)"
-
-        if values_matrix.empty:
-            st.info("No values to display in heatmap with current filters.")
-        else:
-            # Normalize per KPI for fair coloring across units/scales
-            norm_matrix = normalize_by_kpi(values_matrix.astype(float))
-
-            # Plot heatmap with annotations (original text values)
-            fig_w = max(6, len(values_matrix.columns) * 0.9)
-            fig_h = max(4, len(values_matrix.index) * 0.5)
+            fig_w = max(6, len(norm_mat.columns) * 0.9)
+            fig_h = max(4, len(norm_mat.index) * 0.5)
             fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=140)
-            im = ax.imshow(norm_matrix.values, aspect="auto")  # default colormap
-
-            ax.set_xticks(np.arange(values_matrix.shape[1]))
-            ax.set_yticks(np.arange(values_matrix.shape[0]))
-            ax.set_xticklabels(values_matrix.columns, rotation=45, ha="right")
-            ax.set_yticklabels(values_matrix.index)
-            ax.set_title(title)
+            im = ax.imshow(norm_mat.values, aspect="auto")
+            ax.set_xticks(np.arange(norm_mat.shape[1]))
+            ax.set_yticks(np.arange(norm_mat.shape[0]))
+            ax.set_xticklabels(norm_mat.columns, rotation=45, ha="right")
+            ax.set_yticklabels(norm_mat.index)
+            ax.set_title(f"Advanced Heatmap ({norm_method}, direction-aware)")
             ax.set_xlabel("KPI")
             ax.set_ylabel("Vendor")
-
             cbar = fig.colorbar(im, ax=ax)
-            cbar.ax.set_ylabel("Normalized intensity", rotation=270, labelpad=12)
+            cbar.ax.set_ylabel("Normalized score", rotation=270, labelpad=12)
 
-            # Annotate with original value + unit
-            # Limit annotations if matrix is very large
-            if values_matrix.shape[0] * values_matrix.shape[1] <= 400:
-                for i in range(values_matrix.shape[0]):
-                    for j in range(values_matrix.shape[1]):
-                        txt = ""
-                        try:
-                            txt = str(text_matrix.iloc[i, j])
-                        except Exception:
-                            pass
+            # Annotate with original values
+            if norm_mat.shape[0]*norm_mat.shape[1] <= 400:
+                for r in range(norm_mat.shape[0]):
+                    for c in range(norm_mat.shape[1]):
+                        txt = str(text_mat.iloc[r,c])
                         if txt and txt != "nan":
-                            ax.text(j, i, txt, ha="center", va="center", fontsize=7, color="black")
+                            ax.text(c, r, txt, ha="center", va="center", fontsize=7, color="black")
 
             st.pyplot(fig)
+
+# ---- Coverage (data completeness) ----
+with tab4:
+    # Count observations per (vendor,kpi) and last as_of
+    cov = flt.copy()
+    cov["obs"] = 1
+    counts = cov.groupby(["vendor","kpi"], as_index=False)["obs"].sum()
+    last = cov[cov["as_of"].notna()].sort_values("as_of").groupby(["vendor","kpi"], as_index=False).tail(1)[["vendor","kpi","as_of"]]
+    cov_tbl = counts.merge(last, on=["vendor","kpi"], how="left")
+
+    # Pivot to matrix for heatmap of counts
+    cm = cov_tbl.pivot_table(index="vendor", columns="kpi", values="obs", aggfunc="sum").fillna(0)
+
+    if cm.empty:
+        st.info("No coverage to display.")
+    else:
+        fig_w = max(6, len(cm.columns) * 0.9)
+        fig_h = max(4, len(cm.index) * 0.5)
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=140)
+        im = ax.imshow(cm.values, aspect="auto")
+        ax.set_xticks(np.arange(cm.shape[1]))
+        ax.set_yticks(np.arange(cm.shape[0]))
+        ax.set_xticklabels(cm.columns, rotation=45, ha="right")
+        ax.set_yticklabels(cm.index)
+        ax.set_title("Coverage Heatmap (observations count)")
+        ax.set_xlabel("KPI")
+        ax.set_ylabel("Vendor")
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.ax.set_ylabel("# of observations", rotation=270, labelpad=12)
+
+        # annotate with last as_of (short date) if available & matrix not huge
+        if cm.shape[0]*cm.shape[1] <= 400:
+            # Quick lookup for last dates
+            last_map = {(r.vendor, r.kpi): (str(pd.to_datetime(r.as_of).date()) if pd.notna(r.as_of) else "") for _, r in cov_tbl.iterrows()}
+            for i, v in enumerate(cm.index):
+                for j, k in enumerate(cm.columns):
+                    last_str = last_map.get((v,k), "")
+                    if last_str:
+                        ax.text(j, i, last_str, ha="center", va="center", fontsize=7, color="black")
+        st.pyplot(fig)

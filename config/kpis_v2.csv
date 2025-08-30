@@ -1,0 +1,31 @@
+vendor,kpi,value,unit,currency,as_of,source,notes
+ASML,Backlog,39,billion EUR,EUR,2025-06-30,Company report,Backlog guided H2'25
+ASML,Installed base,16000,tools,,2025-06-30,Company report,Serviceable tools
+ASML,EUV systems shipped,29,systems,,2025-06-30,Company report,
+ASML,DUV systems shipped,170,systems,,2025-06-30,Company report,
+ASML,Revenue TTM,29.5,billion EUR,EUR,2025-06-30,Company report,
+ASML,Book-to-Bill,0.92,ratio,,2025-06-30,Company report,
+
+Applied Materials,Revenue TTM,27,billion USD,USD,2025-06-30,Company report,
+Applied Materials,Order Intake,26,billion USD,USD,2025-06-30,Company report,
+Applied Materials,Installed base,45000,tools,,2025-06-30,Company report,
+Applied Materials,Gross Margin %,47,percent,,2025-06-30,Company report,
+
+Lam Research,Installed base,17000,tools,,2025-06-30,Company report,
+Lam Research,Revenue TTM,14.8,billion USD,USD,2025-06-30,Company report,
+Lam Research,Book-to-Bill,1.08,ratio,,2025-06-30,Company report,
+
+TSMC,Wafer starts,1400000,wafer/month,,2025-06-30,Company report,12-inch eq.
+TSMC,Revenue TTM,89,billion USD,USD,2025-06-30,Company report,
+TSMC,CapEx,30,billion USD,USD,2025-06-30,Company report,
+TSMC,Utilization %,78,percent,,2025-06-30,Est.,
+
+Intel,Process node,Intel 18A,node,,2025-06-30,Company report,Qualitative metric
+Intel,Revenue TTM,54,billion USD,USD,2025-06-30,Company report,
+Intel,Gross Margin %,41,percent,,2025-06-30,Company report,
+
+Samsung Foundry,Revenue TTM,22,billion USD,USD,2025-06-30,Est.,
+Samsung Foundry,Utilization %,65,percent,,2025-06-30,Est.,
+
+NVIDIA,Revenue TTM,120,billion USD,USD,2025-06-30,Company report,For context vs suppliers
+NVIDIA,Gross Margin %,74,percent,,2025-06-30,Company report,

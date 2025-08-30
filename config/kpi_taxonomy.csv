@@ -1,0 +1,20 @@
+kpi,category,preferred_unit,direction,description
+Revenue TTM,Financial,billion USD,higher_good,Trailing twelve month revenue
+Gross Margin %,Profitability,percent,higher_good,Gross margin percentage
+Operating Margin %,Profitability,percent,higher_good,Operating margin percentage
+CapEx,Investment,billion USD,mixed,Capital expenditures (annualized / run-rate)
+R&D %,Investment,percent,higher_good,R&D as % of revenue
+Backlog,Orders,billion USD,higher_good,Unfulfilled orders / backlog
+Order Intake,Orders,billion USD,higher_good,New orders booked in period
+Book-to-Bill,Orders,ratio,higher_good,Orders/Shipments ratio
+Installed base,Scale,tools,higher_good,Cumulative tools in field
+EUV systems shipped,Scale,systems,higher_good,Units shipped in period
+DUV systems shipped,Scale,systems,higher_good,Units shipped in period
+Wafer starts,Manufacturing,wafer/month,higher_good,Wafer starts per month
+Yield %,Manufacturing,percent,higher_good,Line or product yield
+Utilization %,Manufacturing,percent,higher_good,Factory / tool utilization
+Lead time,Supply,weeks,lower_good,Average delivery lead time
+ASP,Commercial,kUSD/layer,mixed,Average selling price (context dependent)
+Customer deposits,Financial,billion USD,higher_good,Advance payments / deposits
+Net cash,Financial,billion USD,higher_good,Cash - debt
+Process node,Technology,node,higher_good,Current node leadership (textual metric)
