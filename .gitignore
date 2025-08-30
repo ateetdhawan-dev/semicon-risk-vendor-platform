@@ -1,1 +1,19 @@
+# secrets
 .env
+*.key
+*.pem
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# data/outputs
+data/*.db
+data/*.sqlite
+data/*_annotated.csv
+logs/
+export/
+
+# streamlit
+.streamlit/
