@@ -1,332 +1,153 @@
-import os
-import re
-import math
-import numpy as np
+import sqlite3
+from pathlib import Path
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
-from datetime import date
+import altair as alt
 
-st.set_page_config(page_title="Commercial KPIs", page_icon="📈")
+DB = str((Path(__file__).resolve().parents[1] / "data" / "news.db").resolve())
 
-# ----------------- Helpers -----------------
-def parse_numeric(x):
-    if x is None:
-        return np.nan
-    s = str(x).strip()
-    if not s:
-        return np.nan
-    m = re.search(r"[+-]?\d[\d,]*(?:\.\d+)?", s.replace("\u00A0"," "))
-    if not m:
-        return np.nan
-    try:
-        return float(m.group(0).replace(",", ""))
-    except Exception:
-        return np.nan
+st.set_page_config(page_title="Vendor→Customer KPI Monitor", layout="wide")
+st.title("Vendor → Customer KPI Monitor")
 
-def format_value(val, unit):
-    if val is None or (isinstance(val, float) and math.isnan(val)):
-        return "—"
-    absval = abs(val)
-    if absval >= 1_000_000_000:
-        s = f"{val/1_000_000_000:.2f}B"
-    elif absval >= 1_000_000:
-        s = f"{val/1_000_000:.2f}M"
-    elif absval >= 1_000:
-        s = f"{val/1_000:.2f}K"
-    else:
-        s = f"{val:.2f}"
-    return f"{s} {unit}".strip()
+@st.cache_data(ttl=300, show_spinner=False)
+def load_dims():
+    con=sqlite3.connect(DB)
+    vendors = pd.read_sql_query("SELECT DISTINCT name FROM companies WHERE type IN ('vendor','both') ORDER BY name", con)["name"].tolist()
+    customers = pd.read_sql_query("SELECT DISTINCT name FROM companies WHERE type IN ('customer','both') ORDER BY name", con)["name"].tolist()
+    kpis = pd.read_sql_query("SELECT id,key,display_name,unit FROM kpi_definitions ORDER BY display_name", con)
+    con.close()
+    return vendors, customers, kpis
 
-def normalize(values: pd.Series, method: str = "minmax"):
-    arr = values.astype(float)
-    if method == "zscore":
-        mu = np.nanmean(arr)
-        sd = np.nanstd(arr)
-        if sd == 0 or np.isnan(sd):
-            return pd.Series(np.full_like(arr, 0.0), index=values.index)
-        return (arr - mu) / sd
-    # minmax
-    vmin = np.nanmin(arr) if not np.isnan(arr).all() else np.nan
-    vmax = np.nanmax(arr) if not np.isnan(arr).all() else np.nan
-    if vmin == vmax or np.isnan(vmin) or np.isnan(vmax):
-        return pd.Series(np.full_like(arr, 0.5), index=values.index)
-    return (arr - vmin) / (vmax - vmin)
-
-# ----------------- Loaders -----------------
-@st.cache_data
-def load_taxonomy():
-    path = "config/kpi_taxonomy.csv"
-    if not os.path.exists(path):
-        # default minimal taxonomy
-        return pd.DataFrame({
-            "kpi": ["Revenue TTM","Backlog","Installed base","Wafer starts","Lead time","Gross Margin %","Process node"],
-            "category": ["Financial","Orders","Scale","Manufacturing","Supply","Profitability","Technology"],
-            "preferred_unit": ["billion USD","billion USD","tools","wafer/month","weeks","percent","node"],
-            "direction": ["higher_good","higher_good","higher_good","higher_good","lower_good","higher_good","higher_good"],
-            "description": ["" for _ in range(7)]
-        })
-    return pd.read_csv(path)
-
-@st.cache_data
-def load_kpis():
-    # Prefer v2 if exists
-    p2 = "config/kpis_v2.csv"
-    p1 = "config/kpis.csv"
-    if os.path.exists(p2):
-        df = pd.read_csv(p2)
-    elif os.path.exists(p1):
-        df = pd.read_csv(p1)
-    else:
-        return pd.DataFrame(columns=["vendor","kpi","value","unit","currency","as_of","source","notes"])
-
-    # Ensure columns exist
-    for col in ["vendor","kpi","value","unit","currency","as_of","source","notes"]:
-        if col not in df.columns:
-            df[col] = ""
-
-    # Normalize
-    df["vendor"] = df["vendor"].astype(str).str.strip()
-    df["kpi"]    = df["kpi"].astype(str).str.strip()
-    df["unit"]   = df["unit"].astype(str).str.strip()
-    df["currency"] = df["currency"].astype(str).str.strip()
-    df["source"] = df["source"].astype(str).str.strip()
-    df["notes"]  = df["notes"].astype(str).str.strip()
-    df["value"]  = df["value"].apply(parse_numeric).astype(float)
-    df["as_of"]  = pd.to_datetime(df["as_of"], errors="coerce")
-
-    # Drop empties
-    df = df[(df["vendor"]!="") & (df["kpi"]!="")]
+@st.cache_data(ttl=300, show_spinner=False)
+def latest_kpis():
+    con=sqlite3.connect(DB)
+    df = pd.read_sql_query("""
+        WITH latest AS (
+          SELECT relationship_id, kpi_id, MAX(period_end) AS max_end
+          FROM kpi_values GROUP BY relationship_id, kpi_id
+        )
+        SELECT
+          v.name AS vendor, c.name AS customer,
+          kd.id AS kpi_id, kd.key, kd.display_name, kd.unit,
+          kv.value, kv.period_end
+        FROM latest l
+        JOIN kpi_values kv ON kv.relationship_id=l.relationship_id AND kv.kpi_id=l.kpi_id AND kv.period_end=l.max_end
+        JOIN relationships r ON r.id = kv.relationship_id
+        JOIN companies v ON v.id = r.vendor_id
+        JOIN companies c ON c.id = r.customer_id
+        JOIN kpi_definitions kd ON kd.id = kv.kpi_id
+    """, con)
+    con.close()
+    if not df.empty:
+        df["period_end"] = pd.to_datetime(df["period_end"])
     return df
 
-# ----------------- Data prep -----------------
-tax = load_taxonomy()
-df  = load_kpis()
+@st.cache_data(ttl=300, show_spinner=False)
+def kpi_series():
+    con=sqlite3.connect(DB)
+    df = pd.read_sql_query("""
+        SELECT
+          v.name AS vendor, c.name AS customer,
+          kd.display_name, kd.key, kd.unit,
+          kv.value, kv.period_end
+        FROM kpi_values kv
+        JOIN relationships r ON r.id = kv.relationship_id
+        JOIN companies v ON v.id = r.vendor_id
+        JOIN companies c ON c.id = r.customer_id
+        JOIN kpi_definitions kd ON kd.id = kv.kpi_id
+        ORDER BY kv.period_end
+    """, con)
+    con.close()
+    if not df.empty:
+        df["period_end"] = pd.to_datetime(df["period_end"])
+    return df
 
-st.title("📈 Commercial KPI Intelligence")
+vendors, customers, kpis_def = load_dims()
+latest = latest_kpis()
+series = kpi_series()
 
-if df.empty:
-    st.info("No KPI data found. Please populate `config/kpis_v2.csv` (preferred) or `config/kpis.csv`.")
-    st.stop()
+mode = st.radio("Mode", ["Portfolio","Single relationship"], index=0, horizontal=True)
 
-# Join taxonomy to get category + direction
-tax_small = tax[["kpi","category","preferred_unit","direction"]].drop_duplicates()
-df = df.merge(tax_small, on="kpi", how="left")
-
-# ----------------- Filters -----------------
-all_vendors = sorted(df["vendor"].dropna().unique())
-all_kpis    = sorted(df["kpi"].dropna().unique())
-all_cats    = sorted([x for x in df["category"].dropna().unique() if str(x).strip()])
-
-c1, c2, c3 = st.columns([2,2,2])
-with c1:
-    sel_vendors = st.multiselect("Vendors", all_vendors, default=all_vendors[:min(6,len(all_vendors))])
-with c2:
-    sel_categories = st.multiselect("Categories", all_cats, default=all_cats)
-with c3:
-    # choose normalization
-    norm_method = st.selectbox("Normalization", ["minmax","zscore"], index=0)
-
-# Date filter row
-c4, c5 = st.columns([2,2])
-with c4:
-    # KPI picker limited by chosen categories
-    kpi_pool = sorted(df[df["category"].isin(sel_categories)]["kpi"].dropna().unique()) if sel_categories else all_kpis
-    sel_kpis = st.multiselect("KPIs", kpi_pool, default=kpi_pool[:min(8,len(kpi_pool))])
-with c5:
-    if df["as_of"].notna().any():
-        dmin, dmax = df["as_of"].min().date(), df["as_of"].max().date()
-        date_range = st.date_input("As-of range", (dmin, dmax), min_value=dmin, max_value=dmax)
+if mode=="Single relationship":
+    col1,col2 = st.columns(2)
+    vend = col1.selectbox("Vendor", vendors, index=(vendors.index("ASML") if "ASML" in vendors else 0))
+    cust = col2.selectbox("Customer", customers, index=(customers.index("TSMC") if "TSMC" in customers else 0))
+    # cards
+    sel = latest[(latest["vendor"]==vend) & (latest["customer"]==cust)]
+    st.subheader(f"Latest KPIs — {vend} → {cust}")
+    if sel.empty:
+        st.info("No KPIs yet for this pair.")
     else:
-        date_range = None
+        cols = st.columns(min(4, max(1, len(sel))))
+        for i, (_, row) in enumerate(sel.sort_values("display_name").iterrows()):
+            c = cols[i % len(cols)]
+            unit = f" {row['unit']}" if row['unit'] and row['unit']!="None" else ""
+            c.metric(row["display_name"], f"{row['value']}{unit}", help=f"Period end: {row['period_end'].date()}")
+        # trends
+        st.markdown("### Trends")
+        tsel = series[(series["vendor"]==vend) & (series["customer"]==cust)]
+        for name, grp in tsel.groupby("display_name"):
+            ch = alt.Chart(grp).mark_line(point=True).encode(
+                x=alt.X("period_end:T", title="Period"),
+                y=alt.Y("value:Q", title=name),
+                tooltip=["period_end:T","value:Q"]
+            ).properties(height=220)
+            st.altair_chart(ch, use_container_width=True)
 
-flt = df.copy()
-if sel_vendors:
-    flt = flt[flt["vendor"].isin(sel_vendors)]
-if sel_categories:
-    flt = flt[flt["category"].isin(sel_categories)]
-if sel_kpis:
-    flt = flt[flt["kpi"].isin(sel_kpis)]
-if date_range and isinstance(date_range, tuple) and len(date_range)==2:
-    start_d, end_d = date_range
-    flt = flt[(flt["as_of"].dt.date>=start_d) & (flt["as_of"].dt.date<=end_d)]
-
-st.caption(f"{len(flt)} records after filters")
-
-# ----------------- Overview cards -----------------
-latest = flt.copy()
-if latest["as_of"].notna().any():
-    latest = latest.sort_values("as_of").groupby(["vendor","kpi"], as_index=False).tail(1)
 else:
-    latest = latest.groupby(["vendor","kpi"], as_index=False).agg({"value":"mean","unit":"first","category":"first","direction":"first"})
+    c1,c2,c3 = st.columns(3)
+    vend_sel = c1.multiselect("Vendors", vendors, default=vendors)
+    cust_sel = c2.multiselect("Customers", customers, default=customers)
+    kpi_names = kpis_def["display_name"].tolist()
+    kpi_sel = c3.multiselect("KPIs", kpi_names, default=[n for n in kpi_names if n in ["Tool Availability","On-Time Delivery","Installed Base Tools","EUV Systems Shipped"]][:4])
 
-cA,cB,cC,cD = st.columns(4)
-with cA: st.metric("Vendors", len(set(flt["vendor"])))
-with cB: st.metric("KPIs", len(set(flt["kpi"])))
-with cC: st.metric("Latest Points", int(latest.shape[0]))
-with cD:
-    if flt["as_of"].notna().any():
-        recency_days = (pd.Timestamp(date.today()) - flt["as_of"].max()).days
-        st.metric("Data recency (days)", int(recency_days))
+    view = latest.copy()
+    if vend_sel: view = view[view["vendor"].isin(vend_sel)]
+    if cust_sel: view = view[view["customer"].isin(cust_sel)]
+    if kpi_sel:  view = view[view["display_name"].isin(kpi_sel)]
+
+    st.subheader(f"Portfolio overview — {len(view[['vendor','customer']].drop_duplicates())} relationships")
+
+    if view.empty:
+        st.info("No data for the current filters.")
     else:
-        st.metric("Data recency (days)", "—")
+        # Heatmaps per KPI (limit to 4 for readability)
+        for name in view["display_name"].drop_duplicates().tolist()[:4]:
+            sub = view[view["display_name"]==name]
+            pivot = sub.pivot_table(index="vendor", columns="customer", values="value", aggfunc="mean")
+            plot = pivot.reset_index().melt(id_vars="vendor", var_name="customer", value_name="value")
+            st.markdown(f"**{name}** (latest)")
+            chart = alt.Chart(plot).mark_rect().encode(
+                x=alt.X("customer:N", title="Customer"),
+                y=alt.Y("vendor:N", title="Vendor"),
+                color=alt.Color("value:Q", title=name),
+                tooltip=["vendor","customer","value"]
+            ).properties(height=220)
+            text = alt.Chart(plot).mark_text(baseline='middle').encode(
+                x="customer:N", y="vendor:N",
+                text=alt.Text("value:Q", format=".2f")
+            )
+            st.altair_chart(chart + text, use_container_width=True)
 
-st.divider()
+        # Latest table
+        tbl = view.sort_values(["display_name","vendor","customer"])[["display_name","vendor","customer","value","unit","period_end"]]
+        st.dataframe(
+            tbl.rename(columns={"display_name":"KPI","period_end":"As of"}),
+            use_container_width=True,
+            column_config={"As of": st.column_config.DatetimeColumn(format="YYYY-MM-DD")}
+        )
 
-# ----------------- Tabs -----------------
-tab1, tab2, tab3, tab4 = st.tabs(["📋 Explorer","📉 Trends","🗺️ Advanced Heatmap","🧩 Coverage"])
-
-# ---- Explorer ----
-with tab1:
-    view = flt.copy()
-    view["value_display"] = [format_value(v,u) for v,u in zip(view["value"], view["unit"])]
-    cols = ["vendor","category","kpi","value_display","value","unit","currency","as_of","source","notes"]
-    cols = [c for c in cols if c in view.columns]
-    # sort for readability
-    if "as_of" in view.columns:
-        view = view.sort_values(["vendor","category","kpi","as_of"])
-    st.dataframe(view[cols], width="stretch", height=450)
-
-# ---- Trends ----
-with tab2:
-    if not flt.empty and flt["as_of"].notna().any():
-        t1,t2 = st.columns([2,2])
-        with t1:
-            trend_vendor = st.selectbox("Vendor", ["(All)"] + sel_vendors if sel_vendors else ["(All)"] + all_vendors)
-        with t2:
-            trend_kpi = st.selectbox("KPI", ["(All)"] + sel_kpis if sel_kpis else ["(All)"])
-
-        data = flt.copy()
-        if trend_vendor != "(All)":
-            data = data[data["vendor"]==trend_vendor]
-        if trend_kpi != "(All)":
-            data = data[data["kpi"]==trend_kpi]
-
-        if data.empty:
-            st.info("No data to plot for this selection.")
-        else:
-            data = data.dropna(subset=["as_of"]).sort_values("as_of")
-            data["series"] = data["vendor"] + " · " + data["kpi"]
-            piv = data.pivot_table(index="as_of", columns="series", values="value", aggfunc="mean").sort_index()
-            if piv.empty:
-                st.info("Nothing to plot.")
-            else:
-                fig, ax = plt.subplots(figsize=(9,4), dpi=140)
-                for col in piv.columns:
-                    ax.plot(piv.index, piv[col], label=str(col))
-                ax.set_title("KPI Trends")
-                ax.set_xlabel("As of date")
-                ax.set_ylabel("Value")
-                if len(piv.columns) <= 10:
-                    ax.legend(loc="best", fontsize=8)
-                ax.grid(True, alpha=0.3)
-                st.pyplot(fig)
-    else:
-        st.info("No dated series available. Add `as_of` dates to see trends.")
-
-# ---- Advanced Heatmap ----
-with tab3:
-    # Aggregate: latest by date if present, else mean
-    agg = flt.copy()
-    by = ["vendor","kpi","category","direction","unit"]
-    if agg["as_of"].notna().any():
-        agg = agg.sort_values("as_of").groupby(by, as_index=False).tail(1)
-    else:
-        agg = agg.groupby(by, as_index=False).agg({"value":"mean"})
-
-    if agg.empty:
-        st.info("No values to display.")
-    else:
-        # Normalize per KPI with direction
-        # Build matrix vendor x KPI (values)
-        mat = agg.pivot_table(index="vendor", columns="kpi", values="value", aggfunc="mean")
-        # Keep units for annotations: choose most common per vendor/kpi
-        units = agg.groupby(["vendor","kpi"])["unit"].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else "").reset_index()
-        units_mat = units.pivot(index="vendor", columns="kpi", values="unit").reindex(index=mat.index, columns=mat.columns)
-
-        # Direction-aware normalization per KPI
-        norm_cols = {}
-        for k in mat.columns:
-            col = mat[k]
-            col_norm = normalize(col, method=norm_method)
-            # direction: if lower_good, invert
-            dir_k = agg[agg["kpi"]==k]["direction"].dropna().unique()
-            if len(dir_k) and dir_k[0].lower().startswith("lower"):
-                col_norm = 1 - col_norm
-            norm_cols[k] = col_norm
-        norm_mat = pd.DataFrame(norm_cols, index=mat.index)
-
-        # Prepare annotation text: value + unit
-        text_mat = pd.DataFrame(index=mat.index, columns=mat.columns)
-        for i in mat.index:
-            for j in mat.columns:
-                v = mat.loc[i,j]
-                u = units_mat.loc[i,j] if (i in units_mat.index and j in units_mat.columns) else ""
-                text_mat.loc[i,j] = format_value(v,u) if pd.notna(v) else ""
-
-        if norm_mat.empty:
-            st.info("No values to display.")
-        else:
-            fig_w = max(6, len(norm_mat.columns) * 0.9)
-            fig_h = max(4, len(norm_mat.index) * 0.5)
-            fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=140)
-            im = ax.imshow(norm_mat.values, aspect="auto")
-            ax.set_xticks(np.arange(norm_mat.shape[1]))
-            ax.set_yticks(np.arange(norm_mat.shape[0]))
-            ax.set_xticklabels(norm_mat.columns, rotation=45, ha="right")
-            ax.set_yticklabels(norm_mat.index)
-            ax.set_title(f"Advanced Heatmap ({norm_method}, direction-aware)")
-            ax.set_xlabel("KPI")
-            ax.set_ylabel("Vendor")
-            cbar = fig.colorbar(im, ax=ax)
-            cbar.ax.set_ylabel("Normalized score", rotation=270, labelpad=12)
-
-            # Annotate with original values
-            if norm_mat.shape[0]*norm_mat.shape[1] <= 400:
-                for r in range(norm_mat.shape[0]):
-                    for c in range(norm_mat.shape[1]):
-                        txt = str(text_mat.iloc[r,c])
-                        if txt and txt != "nan":
-                            ax.text(c, r, txt, ha="center", va="center", fontsize=7, color="black")
-
-            st.pyplot(fig)
-
-# ---- Coverage (data completeness) ----
-with tab4:
-    # Count observations per (vendor,kpi) and last as_of
-    cov = flt.copy()
-    cov["obs"] = 1
-    counts = cov.groupby(["vendor","kpi"], as_index=False)["obs"].sum()
-    last = cov[cov["as_of"].notna()].sort_values("as_of").groupby(["vendor","kpi"], as_index=False).tail(1)[["vendor","kpi","as_of"]]
-    cov_tbl = counts.merge(last, on=["vendor","kpi"], how="left")
-
-    # Pivot to matrix for heatmap of counts
-    cm = cov_tbl.pivot_table(index="vendor", columns="kpi", values="obs", aggfunc="sum").fillna(0)
-
-    if cm.empty:
-        st.info("No coverage to display.")
-    else:
-        fig_w = max(6, len(cm.columns) * 0.9)
-        fig_h = max(4, len(cm.index) * 0.5)
-        fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=140)
-        im = ax.imshow(cm.values, aspect="auto")
-        ax.set_xticks(np.arange(cm.shape[1]))
-        ax.set_yticks(np.arange(cm.shape[0]))
-        ax.set_xticklabels(cm.columns, rotation=45, ha="right")
-        ax.set_yticklabels(cm.index)
-        ax.set_title("Coverage Heatmap (observations count)")
-        ax.set_xlabel("KPI")
-        ax.set_ylabel("Vendor")
-        cbar = fig.colorbar(im, ax=ax)
-        cbar.ax.set_ylabel("# of observations", rotation=270, labelpad=12)
-
-        # annotate with last as_of (short date) if available & matrix not huge
-        if cm.shape[0]*cm.shape[1] <= 400:
-            # Quick lookup for last dates
-            last_map = {(r.vendor, r.kpi): (str(pd.to_datetime(r.as_of).date()) if pd.notna(r.as_of) else "") for _, r in cov_tbl.iterrows()}
-            for i, v in enumerate(cm.index):
-                for j, k in enumerate(cm.columns):
-                    last_str = last_map.get((v,k), "")
-                    if last_str:
-                        ax.text(j, i, last_str, ha="center", va="center", fontsize=7, color="black")
-        st.pyplot(fig)
+        # Trends for a chosen KPI across all selected pairs
+        pick = st.selectbox("Trend for KPI", sorted(view["display_name"].unique().tolist()))
+        tsel = series[(series["display_name"]==pick)]
+        if vend_sel: tsel = tsel[tsel["vendor"].isin(vend_sel)]
+        if cust_sel: tsel = tsel[tsel["customer"].isin(cust_sel)]
+        if not tsel.empty:
+            ch = alt.Chart(tsel).mark_line(point=True).encode(
+                x=alt.X("period_end:T", title="Period"),
+                y=alt.Y("value:Q", title=pick),
+                color="vendor:N",
+                strokeDash="customer:N",
+                tooltip=["vendor","customer","period_end:T","value:Q"]
+            ).properties(height=260)
+            st.altair_chart(ch, use_container_width=True)
