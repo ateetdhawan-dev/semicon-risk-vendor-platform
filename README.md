@@ -1,17 +1,57 @@
-# semicon-risk-vendor-platform
-MVP for Semiconductor Risk Intelligence &amp; Vendor Performance
-# semicon-risk-vendor-platform
-MVP for Semiconductor Risk Intelligence & Vendor Performance
+# Semicon Risk Vendor Platform
 
-## MVP Feature List
+An experimental SaaS MVP for tracking and classifying semiconductor supply-chain risks.
+It ingests industry news, applies automated annotation (LLM + rules), and visualizes risks
+and vendor KPIs via Streamlit dashboards.
 
-| Feature                        | Description                                              | Priority |
-|--------------------------------|----------------------------------------------------------|----------|
-| News Aggregation & Storage     | Automated daily pull of semiconductor supply chain risk news | High     |
-| Risk Classification & Summarization | Use GPT to classify and summarize news by risk and region | High     |
-| Synthetic Vendor KPI Database  | Diverse sample vendor list with KPIs and risk scoring    | High     |
-| Vendor Risk Dashboard          | UI showing vendor KPIs, risk scores, and related news    | High     |
-| User Profiles & Access Control | Basic login and personalized dashboard views             | Medium   |
-| Alert System                   | Email/Slack alerts for critical risk events              | Medium   |
-| Customer Onboarding Flow       | Signup form and onboarding steps                         | Medium   |
-| Modular Monetization Ready     | Structure code for pricing/payment integration later     | Low      |
+---
+
+## 🚀 Quick Start
+
+- **Setup guide:** [SETUP_AND_RUN.md](SETUP_AND_RUN.md)
+- **Daily usage:** [DAILY_TASKS.md](DAILY_TASKS.md)
+
+---
+
+## 📊 Features
+
+- **News Ingestion** → collects semiconductor news into CSV/SQLite
+- **Risk Annotation** → classifies each article by risk type (vendor, geopolitical, material, other) and severity (low, medium, high)
+- **Dashboards (Streamlit)**  
+  - *News View* – explore risk-tagged news  
+  - *Commercial KPI View* – track vendor and KPI data  
+
+---
+
+## 🛠️ Tech Stack
+
+- Python 3.11+
+- Streamlit
+- OpenAI API (optional for richer annotation; rule-based fallback available)
+- SQLite / CSV data storage
+- GitHub Actions / Task Scheduler for automation (planned)
+
+---
+
+## 🔒 Secrets
+
+All API keys go into `.env` (never committed):
+
+
+---
+
+## 📅 Roadmap
+
+- [x] Ingestion pipeline (news → CSV/DB)  
+- [x] Streamlit dashboards (News + KPIs)  
+- [x] Risk annotation pipeline (CSV + OpenAI API)  
+- [ ] Automated daily ingestion + annotation (Task Scheduler / cron)  
+- [ ] Vendor KPI enrichment  
+- [ ] SaaS deployment (cloud hosting)
+
+---
+
+## 👤 Author
+
+**Ateet Dhawan**  
+Semiconductor & AI Enthusiast | Building SaaS MVPs  
