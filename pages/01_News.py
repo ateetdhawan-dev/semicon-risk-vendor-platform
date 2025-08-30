@@ -1,207 +1,130 @@
-import sqlite3, json
-from pathlib import Path
-from datetime import datetime, timedelta, timezone
+import os
+import re
+import json
 import pandas as pd
 import streamlit as st
-import altair as alt
+from urllib.parse import urlparse
 
-# Resolve project root (this file lives under /pages)
-BASE = Path(__file__).resolve().parents[1]
-DB   = BASE / "data" / "news.db"
-CFG  = BASE / "config"
+st.set_page_config(page_title="Semiconductor Risk News", page_icon="📰")
 
-def read_json(path, default):
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except Exception:
-        return default
+PUBLISHER_FONT_RE = re.compile(r"<font[^>]*>([^<]+)</font>", re.IGNORECASE)
+TAG_STRIP_RE = re.compile(r"<[^<]+?>")
 
-FLAGS = read_json(CFG / "flags.json", {"use_primary": False})
+def strip_html(s: str) -> str:
+    return TAG_STRIP_RE.sub("", s or "")
 
-@st.cache_data(show_spinner=False, ttl=300)
-def load_df():
-    # Ensure data dir exists
-    (BASE / "data").mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(DB))
-    try:
-        df = pd.read_sql_query("SELECT * FROM news", con)
-    except Exception:
-        q = """
-        SELECT
-          hash_id AS id,
-          published_at AS date_utc,
-          title, source, link, summary,
-          COALESCE(vendor_matches,'') AS matched_keywords,
-          COALESCE(risk_type,'')      AS risk_types,
-          vendor_primary, risk_primary, risk_score
-        FROM news_events
-        """
-        df = pd.read_sql_query(q, con)
-    finally:
-        con.close()
-
-    # Normalize essential columns
-    for c in ["title","source","link","summary","matched_keywords","risk_types",
-              "vendor_primary","risk_primary"]:
-        if c not in df.columns: df[c] = ""
-        df[c] = df[c].fillna("")
-    if "risk_score" not in df.columns: df["risk_score"] = 0.0
-
-    # Timestamps & helper lists
-    df["date_utc"] = pd.to_datetime(df.get("date_utc"), utc=True, errors="coerce")
-    df["risk_list"]   = df["risk_types"].apply(lambda s: [x.strip() for x in str(s).split(",") if x.strip()])
-    df["vendor_list"] = df["matched_keywords"].apply(lambda s: [x.strip() for x in str(s).split(",") if x.strip()])
-    df["day"] = df["date_utc"].dt.date
-    return df.sort_values("date_utc", ascending=False)
-
-@st.cache_data(show_spinner=False)
-def load_risks():
-    cfg = read_json(CFG / "risk_types.json", {})
-    risks = cfg.get("risks")
-    if risks and isinstance(risks, list): return risks
-    return ["geopolitical","material","vendor"]
-
-@st.cache_data(show_spinner=False)
-def load_vendors():
-    p = CFG / "vendors_master.csv"
-    if p.exists():
+def extract_publisher(row) -> str:
+    summary_html = str(row.get("summary", "") or "")
+    m = PUBLISHER_FONT_RE.search(summary_html)
+    if m:
+        return m.group(1).strip()
+    url = row.get("link") or row.get("url") or ""
+    if isinstance(url, str) and url.startswith("http"):
         try:
-            t = pd.read_csv(p)
-            col = "vendor" if "vendor" in t.columns else t.columns[0]
-            vs = [v for v in t[col].dropna().astype(str).str.strip().tolist() if v]
-            return list(dict.fromkeys(vs))
-        except:
+            netloc = urlparse(url).netloc
+            for pref in ("www.", "news.google.com", "news.yahoo.com"):
+                if netloc.startswith(pref):
+                    netloc = netloc[len(pref):]
+            return netloc
+        except Exception:
             pass
-    df = load_df()
-    return sorted({v for vs in df["vendor_list"] for v in vs})
+    return str(row.get("source", "") or "").replace("news.google.com", "Google News").strip()
 
-st.set_page_config(page_title="Semiconductor Risk Monitor", layout="wide")
-st.title("Semiconductor Supply Chain Risk Monitor (News)")
+def explode_vendors(series: pd.Series) -> list:
+    vendors = set()
+    for v in series.dropna():
+        s = str(v).strip()
+        if s.startswith("[") and s.endswith("]"):
+            try:
+                items = json.loads(s)
+                for it in items:
+                    name = str(it).strip()
+                    if name: vendors.add(name)
+                continue
+            except Exception:
+                pass
+        for token in re.split(r"[|,]", s):
+            name = token.strip()
+            if name: vendors.add(name)
+    return sorted(vendors)
 
-df        = load_df()
-risks_cfg = load_risks()
-vendors   = load_vendors()
-use_primary = bool(FLAGS.get("use_primary", False))
+@st.cache_data
+def load_news():
+    path_annot = "data/news_events_annotated.csv"
+    path_raw   = "data/news_events.csv"
+    path = path_annot if os.path.exists(path_annot) else path_raw
 
-with st.sidebar:
-    st.header("Filters")
-    days = st.slider("Window (days)", 3, 120, value=30, step=1)
-    if use_primary:
-        min_score = st.slider("Min risk score", 0.0, 1.5, 0.0, 0.05)
-        risk_sel  = st.multiselect("Primary Risk", options=risks_cfg, default=[])
-        vend_sel  = st.multiselect("Primary Vendor", options=vendors, default=[])
+    df = pd.read_csv(path)
+    for c in ["risk_type","severity","source","title","summary","published_at","link","url","vendor_matches","region_guess"]:
+        if c in df.columns:
+            df[c] = df[c].astype(str)
+
+    if "published_at" in df.columns:
+        df["date"] = pd.to_datetime(df["published_at"], errors="coerce").dt.date
     else:
-        risk_sel  = st.multiselect("Risk Types (multi)", options=risks_cfg, default=[])
-        vend_sel  = st.multiselect("Vendors (multi)", options=vendors, default=[])
-    source_opts = sorted({s for s in df["source"].unique() if s})
-    source_sel  = st.multiselect("Sources", options=source_opts, default=[])
-    include_kw  = st.text_input("Title includes (comma-separated)", "")
-    exclude_kw  = st.text_input("Title excludes (comma-separated)", "")
+        df["date"] = pd.NaT
 
-# Time window
-now_utc = datetime.now(timezone.utc)
-cutoff = pd.Timestamp(now_utc) - pd.Timedelta(days=days)
-view = df[df["date_utc"] >= cutoff].copy()
+    df["publisher"] = df.apply(extract_publisher, axis=1)
+    df["summary_plain"] = df["summary"].map(strip_html)
+    return df
 
-# Safety: ensure lists exist on filtered view
-if "risk_types" not in view.columns: view["risk_types"] = ""
-if "matched_keywords" not in view.columns: view["matched_keywords"] = ""
-view["risk_list"]   = view["risk_types"].apply(lambda s: [x.strip() for x in str(s).split(",") if x.strip()])
-view["vendor_list"] = view["matched_keywords"].apply(lambda s: [x.strip() for x in str(s).split(",") if x.strip()])
+st.title("📰 Semiconductor Risk News")
+df = load_news()
 
-def any_match(text, needles):
-    t = (text or "").lower()
-    return any((n or "").strip().lower() in t for n in needles if (n or "").strip())
+risk_options = sorted([x for x in df.get("risk_type", pd.Series(dtype=str)).dropna().unique() if str(x).strip() and x != "nan"])
+sev_options  = sorted([x for x in df.get("severity",  pd.Series(dtype=str)).dropna().unique() if str(x).strip() and x != "nan"])
+pub_options  = sorted([x for x in df.get("publisher", pd.Series(dtype=str)).dropna().unique() if str(x).strip() and x != "nan"])
+vend_options = explode_vendors(df.get("vendor_matches", pd.Series(dtype=str))) if "vendor_matches" in df.columns else []
 
-incs = [x.strip() for x in include_kw.split(",")] if include_kw.strip() else []
-excs = [x.strip() for x in exclude_kw.split(",")] if exclude_kw.strip() else []
+col1, col2, col3 = st.columns([2,2,3])
+with col1:
+    risk_sel = st.multiselect("Risk Type", options=risk_options, default=[])
+with col2:
+    sev_sel = st.multiselect("Severity", options=sev_options, default=[])
+with col3:
+    pub_sel = st.multiselect("Publisher", options=pub_options, default=[])
 
-# Filtering
-if use_primary:
-    if source_sel: view = view[view["source"].isin(set(source_sel))]
-    if 'risk_primary' in view.columns and risk_sel:
-        view = view[view["risk_primary"].str.lower().isin({r.lower() for r in risk_sel})]
-    if 'vendor_primary' in view.columns and vend_sel:
-        view = view[view["vendor_primary"].str.lower().isin({v.lower() for v in vend_sel})]
-    if incs:       view = view[view["title"].apply(lambda t: any_match(t, incs))]
-    if excs:       view = view[~view["title"].apply(lambda t: any_match(t, excs))]
-    view = view[view.get("risk_score", 0.0) >= float(locals().get("min_score", 0.0))]
-else:
-    if source_sel: view = view[view["source"].isin(set(source_sel))]
-    if risk_sel:
-        sel = {r.lower() for r in risk_sel}
-        view = view[view["risk_list"].apply(lambda rs: any(r.lower() in sel for r in rs))]
-    if vend_sel:
-        sel = {v.lower() for v in vend_sel}
-        view = view[view["vendor_list"].apply(lambda vs: any(v.lower() in sel for v in vs))]
-    if incs: view = view[view["title"].apply(lambda t: any_match(t, incs))]
-    if excs: view = view[~view["title"].apply(lambda t: any_match(t, excs))]
-
-# Header
-start = (now_utc - timedelta(days=days)).date().isoformat()
-end   = now_utc.date().isoformat()
-st.subheader(f"{len(view)} items — {start} to {end} (UTC)  |  Mode: {'PRIMARY' if use_primary else 'CLASSIC'}")
-
-# KPIs
-c1, c2, c3 = st.columns(3)
-c1.metric("Articles", len(view))
-if use_primary:
-    c2.metric("Unique Vendors", view.get("vendor_primary","").replace("", pd.NA).nunique() if "vendor_primary" in view.columns else 0)
-    c3.metric("Avg Risk Score", round(view.get("risk_score",0).mean(),3) if len(view)>0 and "risk_score" in view.columns else 0)
-else:
-    c2.metric("Unique Vendors (any match)", view["vendor_list"].astype(str).nunique())
-    c3.metric("Risks in window", sum(len(x) for x in view["risk_list"]))
-
-# Charts
-if not view.empty:
-    daily = view.groupby("day").size().reset_index(name="count")
-    st.altair_chart(
-        alt.Chart(daily).mark_bar().encode(
-            x=alt.X("day:T", title="Day"),
-            y=alt.Y("count:Q", title="Articles")
-        ).properties(height=220),
-        use_container_width=True
-    )
-    if use_primary and "risk_primary" in view.columns:
-        by_risk = view.groupby("risk_primary").size().reset_index(name="count")
-        st.altair_chart(
-            alt.Chart(by_risk).mark_bar().encode(
-                x=alt.X("risk_primary:N", sort="-y", title="Primary Risk"),
-                y=alt.Y("count:Q")
-            ).properties(height=220),
-            use_container_width=True
-        )
+col4, col5, col6 = st.columns([2,2,3])
+with col4:
+    vend_sel = st.multiselect("Vendor", options=vend_options, default=[])
+with col5:
+    q = st.text_input("Search (title / summary)", "")
+with col6:
+    if "date" in df and df["date"].notna().any():
+        min_d, max_d = df["date"].min(), df["date"].max()
+        date_rng = st.date_input("Date range", value=(min_d, max_d), min_value=min_d, max_value=max_d)
     else:
-        ex = view.explode("risk_list")
-        if not ex.empty:
-            by_risk = ex.groupby("risk_list").size().reset_index(name="count")
-            st.altair_chart(
-                alt.Chart(by_risk).mark_bar().encode(
-                    x=alt.X("risk_list:N", sort="-y", title="Risk Type"),
-                    y=alt.Y("count:Q")
-                ).properties(height=220),
-                use_container_width=True
-            )
+        date_rng = None
 
-# Table
-if not view.empty:
-    if use_primary and all(c in view.columns for c in ["vendor_primary","risk_primary","risk_score"]):
-        tbl = view[["date_utc","title","source","vendor_primary","risk_primary","risk_score","link"]].copy()
-    else:
-        tbl = view[["date_utc","title","source","matched_keywords","risk_types","link"]].copy()
-        tbl.rename(columns={"matched_keywords":"vendors","risk_types":"risks"}, inplace=True)
-    tbl["Open"] = tbl["link"].where(tbl["link"].str.len()>0,"")
-    show_cols = ["date_utc","title","source","Open"]
-    show_cols += ["vendor_primary","risk_primary","risk_score"] if "vendor_primary" in tbl.columns else ["vendors","risks"]
-    st.dataframe(
-        tbl[show_cols],
-        use_container_width=True,
-        column_config={
-            "date_utc": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm", step=60),
-            "risk_score": st.column_config.NumberColumn(format="%.2f"),
-            "Open": st.column_config.LinkColumn("Open", help="Open source article")
-        },
-        hide_index=True
-    )
-else:
-    st.info("No articles match the filters.")
+flt = df.copy()
+if risk_sel: flt = flt[flt["risk_type"].isin(risk_sel)]
+if sev_sel:  flt = flt[flt["severity"].isin(sev_sel)]
+if pub_sel:  flt = flt[flt["publisher"].isin(pub_sel)]
+if vend_sel and "vendor_matches" in flt.columns:
+    pattern = "|".join([re.escape(v) for v in vend_sel])
+    flt = flt[flt["vendor_matches"].str.contains(pattern, case=False, na=False)]
+if q:
+    ql = q.lower()
+    flt = flt[flt["title"].str.lower().str.contains(ql, na=False) | flt["summary_plain"].str.lower().str.contains(ql, na=False)]
+if date_rng and isinstance(date_rng, tuple) and len(date_rng) == 2:
+    start, end = date_rng
+    flt = flt[(flt["date"] >= start) & (flt["date"] <= end)]
+
+st.caption(f"{len(flt)} results")
+
+for _, r in flt.head(300).iterrows():
+    with st.container(border=True):
+        st.markdown(f"**{r.get('title','(no title)')}**")
+        summary = r.get("summary_plain","") or ""
+        if summary.strip():
+            st.write(summary)
+        meta = []
+        if r.get("risk_type"): meta.append(f"risk: {r['risk_type']}")
+        if r.get("severity"):  meta.append(f"severity: {r['severity']}")
+        if r.get("publisher"): meta.append(f"publisher: {r['publisher']}")
+        if pd.notna(r.get("date")): meta.append(f"date: {r['date']}")
+        if meta:
+            st.caption(" · ".join(meta))
+        url = r.get("link") or r.get("url")
+        if isinstance(url, str) and url.startswith("http"):
+            st.link_button("🔗 Open article", url)

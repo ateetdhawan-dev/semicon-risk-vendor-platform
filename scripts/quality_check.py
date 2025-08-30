@@ -1,15 +1,22 @@
-import sqlite3, pandas as pd
-con = sqlite3.connect("data/news.db")
-df = pd.read_sql_query("SELECT published_at, title, vendor_matches, risk_type, vendor_primary, risk_primary FROM news_events", con)
-con.close()
-total = len(df)
-uncl = df["risk_type"].fillna("").str.contains("unclassified").sum()
-empty_vendor = (df["vendor_matches"].fillna("")=="").sum()
-primary_missing = (df["risk_primary"].fillna("")=="").sum() + (df["vendor_primary"].fillna("")=="").sum()
-print(f"Total: {total}")
-print(f"Unclassified (multi): {uncl}")
-print(f"Empty vendor_matches: {empty_vendor}")
-print(f"Missing primary fields: {primary_missing}")
-# simple threshold warning
-if total and (uncl/total > 0.3):
-    print("[WARN] >30% unclassified; consider expanding risk_keywords.json.")
+import pandas as pd, sys, json, os
+INPUT = sys.argv[1] if len(sys.argv)>1 else "data/news_events_annotated.csv"
+OUT   = "logs/quality_report.json"
+
+if not os.path.exists(INPUT):
+    print(f"[warn] {INPUT} not found")
+    raise SystemExit(0)
+
+df = pd.read_csv(INPUT)
+report = {
+    "file": INPUT,
+    "rows": int(len(df)),
+    "cols": list(df.columns),
+    "nulls": {c:int(df[c].isna().sum()) for c in df.columns},
+    "risk_counts": df.get("risk_type", pd.Series(dtype=str)).value_counts(dropna=False).to_dict(),
+    "severity_counts": df.get("severity", pd.Series(dtype=str)).value_counts(dropna=False).to_dict(),
+    "top_sources": df.get("source", pd.Series(dtype=str)).value_counts().head(10).to_dict(),
+}
+os.makedirs("logs", exist_ok=True)
+with open(OUT, "w", encoding="utf-8") as f:
+    json.dump(report, f, ensure_ascii=False, indent=2)
+print(f"[done] wrote {OUT}")
