@@ -1,0 +1,22 @@
+{
+  "source": "csv",
+  "path": "export/commercial_kpi.csv",
+  "table": null,
+  "columns": {
+    "date": "date",
+    "vendor": "vendor",
+    "customer": "customer",
+    "region": "region",
+    "product": "product",
+    "metrics": [
+      "revenue",
+      "bookings",
+      "pipeline",
+      "units",
+      "risk_score",
+      "win_rate",
+      "deal_size",
+      "margin"
+    ]
+  }
+}
