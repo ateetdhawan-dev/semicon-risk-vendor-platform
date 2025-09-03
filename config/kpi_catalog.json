@@ -1,0 +1,20 @@
+{
+  "tool_uptime_pct":         {"unit":"%","better":"high","agg":"mean","desc":"Tool availability as % of planned time"},
+  "install_lead_time_days":  {"unit":"days","better":"low","agg":"mean","desc":"PO to tool acceptance in fab"},
+  "wfe_backlog_months":      {"unit":"months","better":"low","agg":"mean","desc":"Order backlog coverage"},
+  "mtbf_hours":              {"unit":"hours","better":"high","agg":"mean","desc":"Mean time between failures"},
+  "field_failure_rate_ppm":  {"unit":"ppm","better":"low","agg":"mean","desc":"Field failure rate of installed base"},
+  "spares_fill_rate_pct":    {"unit":"%","better":"high","agg":"mean","desc":"Parts available when requested"},
+  "support_sla_achv_pct":    {"unit":"%","better":"high","agg":"mean","desc":"Tickets closed within SLA"},
+  "process_qual_days":       {"unit":"days","better":"low","agg":"mean","desc":"Time from install to process qualification"},
+  "cycle_time_delta_pct":    {"unit":"%","better":"low","agg":"mean","desc":"Cycle time impact vs. baseline (negative is good)"},
+  "otd_pct":                 {"unit":"%","better":"high","agg":"mean","desc":"On-time delivery (tools / spares)"},
+  "node_coverage_count":     {"unit":"count","better":"high","agg":"sum","desc":"# technology nodes vendor supports (e.g., 28nm..2nm)"},
+  "fab_coverage_count":      {"unit":"count","better":"high","agg":"sum","desc":"# fabs/sites vendor actively supports"},
+  "china_rev_exposure_pct":  {"unit":"%","better":"low","agg":"last","desc":"Share of revenue tied to China"},
+  "export_ctrl_exposure":    {"unit":"0-100","better":"low","agg":"last","desc":"Exposure to export controls/tariffs"},
+  "supply_chain_risk":       {"unit":"0-100","better":"low","agg":"last","desc":"Parts/materials dependency risk"},
+  "quality_risk":            {"unit":"0-100","better":"low","agg":"last","desc":"Quality/RMA risk"},
+  "cyber_risk":              {"unit":"0-100","better":"low","agg":"last","desc":"Cyber/IP risk"},
+  "financial_risk":          {"unit":"0-100","better":"low","agg":"last","desc":"Liquidity/credit risk"}
+}
