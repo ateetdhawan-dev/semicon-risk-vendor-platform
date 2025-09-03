@@ -1,0 +1,19 @@
+vendor,alias,category,hq_region,notes
+ASML,ASML Holding,FEOL Litho,EU,DUV/EUV systems
+Tokyo Electron,TEL Tokyo Electron,Deposition/Etch,JP,Commonly "TEL"
+Lam Research,Lam,Deposition/Etch,US,
+Applied Materials,Applied,Deposition/Etch,US,
+KLA,,Metrology/Inspection,US,
+Entegris,,FOUP/CMP/Chem,US,
+Intel,,IDM/Foundry,US,
+Samsung,,IDM/Foundry,KR,
+TSMC,,Foundry,TW,
+GlobalFoundries,GF,Foundry,US,
+Micron,,Memory,US,
+SK hynix,SK Hynix,Memory,KR,
+NVIDIA,,IDM/Electronics,US,
+AMD,,IDM/Electronics,US,
+Texas Instruments,TI,IDM/Electronics,US,
+STMicroelectronics,STMicro,IDM/Electronics,EU,
+Infineon,,IDM/Electronics,EU,
+NXP,,IDM/Electronics,EU,
