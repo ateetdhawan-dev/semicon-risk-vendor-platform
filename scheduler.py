@@ -1,178 +1,110 @@
-# scheduler.py — tolerant scheduler that ingests, tags, and alerts
-# Works with varying column names in news_events.
-
-import os, time, sqlite3, subprocess, sys, shutil
+import os, time, json, sqlite3, datetime, subprocess, sys
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
-import requests
 
-DB_PATH = os.getenv("DB_PATH", "data/news.db")
-SLACK_URL = os.getenv("SLACK_WEBHOOK_URL", "").strip()
-SLEEP_SECONDS = int(os.getenv("SCHEDULER_INTERVAL_SECONDS", str(6*60*60)))
+ROOT = Path(__file__).resolve().parent
+DB = ROOT / "data" / "news.db"
+BACKUP_SCRIPT = ROOT / "scripts" / "backup_db.py"
+INGEST = ROOT / "ingest_min.py"
+TAG = ROOT / "tag_rules_min.py"
+SLACK = os.getenv("SLACK_WEBHOOK_URL", "").strip()
 
-def iso_utc(dt=None):
-    if dt is None:
-        dt = datetime.now(timezone.utc)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+def ts():
+    return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%S%z")
 
-def _run(cmd_list, label):
-    print(f"[ingest] running: {repr(' '.join(cmd_list))}")
+def run(args):
+    print(f"[{ts()}] [run] {args if isinstance(args,str) else ' '.join(map(str,args))}")
+    r = subprocess.run(args, shell=isinstance(args,str))
+    print(f"[{ts()}] [exit] code={r.returncode}")
+    return r.returncode
+
+def slack(text: str):
+    if not SLACK:
+        return
     try:
-        res = subprocess.run(cmd_list, capture_output=True, text=True)
-        if res.stdout: print(res.stdout.rstrip())
-        if res.stderr: print(res.stderr.rstrip())
-        print(f"[ingest] exit code: {res.returncode}")
-        return res.returncode
+        import requests
+        requests.post(SLACK, json={"text": text}, timeout=8)
     except Exception as e:
-        print(f"[ingest] {label} failed: {e}")
-        return 1
+        print(f"[{ts()}] [slack] failed: {e}")
 
-def backup_db():
-    """Prefer scripts/backup_db.py if present (prints stats), else safe copy."""
-    p = Path(DB_PATH)
-    if not p.exists():
+def alert_new_rows():
+    if not DB.exists():
+        print(f"[{ts()}] [alerts] no DB")
         return
-    backup_script = Path("scripts/backup_db.py")
-    if backup_script.exists():
-        _run([sys.executable, str(backup_script)], "backup_db.py")
-        return
-    outdir = Path("backups")
-    outdir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    target = outdir / f"news-{stamp}.db"
-    if not target.exists():
-        try:
-            shutil.copy2(p, target)
-            print(f"[OK] Backup -> {target.as_posix()}")
-        except Exception as e:
-            print(f"[WARN] backup skipped: {e}")
-
-def run_ingest_cycle():
-    py = sys.executable
-    ing_min = Path("ingest_min.py")
-    tag_min = Path("tag_rules_min.py")
-
-    # Run minimal scripts if present
-    if ing_min.exists():
-        _run([py, str(ing_min)], "ingest_min")
-    else:
-        _run([py, "-m", "src.ingest", "--days", "1", "--limit", "200"], "src.ingest")
-
-    if tag_min.exists():
-        _run([py, str(tag_min)], "tag_rules_min")
-    else:
-        _run([py, "-m", "src.tag_rules"], "src.tag_rules")
-
-def get_cols(con, table):
+    con = sqlite3.connect(DB)
+    con.row_factory = sqlite3.Row
     try:
-        return {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
-    except Exception:
-        return set()
-
-def pick(avail, options, default=None):
-    for name in options:
-        if name in avail:
-            return name
-    return default
-
-def post_slack(text):
-    if not SLACK_URL:
-        return
-    try:
-        requests.post(SLACK_URL, json={"text": text}, timeout=8)
-    except Exception:
-        pass
-
-def send_alerts():
-    p = Path(DB_PATH)
-    if not p.exists():
-        print("[alerts] DB not found; skipping")
+        cols = {r["name"] for r in con.execute("pragma table_info(news_events)")}
+    except Exception as e:
+        print(f"[{ts()}] [alerts] table error: {e}")
+        con.close()
         return
 
+    def pick(*cands):
+        for c in cands:
+            if c in cols:
+                return c
+
+    c_published = pick("published","published_at","date_utc")
+    c_vendor    = pick("vendor","vendor_primary","primary_vendor","company")
+    c_source    = pick("source")
+    c_title     = pick("headline","title")
+    c_url       = pick("url","link")
+
+    if not all([c_published,c_vendor,c_source,c_title,c_url]):
+        print(f"[{ts()}] [alerts] missing required columns; skipping")
+        con.close()
+        return
+
+    q = f"""
+      select {c_published} as published,
+             {c_vendor}    as vendor,
+             {c_source}    as source,
+             {c_title}     as title,
+             {c_url}       as url,
+             coalesce(risk_type,'unclassified') as risk,
+             coalesce(severity,'') as sev
+      from news_events
+      where datetime({c_published}) >= datetime('now','-24 hours')
+      order by {c_published} desc
+      limit 15
+    """
     try:
-        con = sqlite3.connect(p)
-        con.row_factory = sqlite3.Row
-        cols = get_cols(con, "news_events")
-        if not cols:
-            print("[alerts] table news_events not found; skipping")
-            con.close()
-            return
-
-        # tolerant column mapping
-        head_col      = pick(cols, ["headline","title","summary"])
-        published_col = pick(cols, ["published","published_at","date_utc","date","dt"])
-        vendor_col    = pick(cols, ["vendor","vendor_primary"])
-        source_col    = pick(cols, ["source","source_name"])
-        url_col       = pick(cols, ["url","link"])
-
-        print("[alerts] column map:",
-              f"headline={head_col}, published={published_col}, vendor={vendor_col}, source={source_col}, url={url_col}")
-
-        if not head_col or not published_col:
-            print("[alerts] need at least a headline/title and a published/date column; skipping")
-            con.close()
-            return
-
-        # Build SELECT that tolerates missing fields with COALESCE('') fallbacks
-        severity_expr = "severity" if "severity" in cols else "'' AS severity"
-        vendor_expr   = vendor_col if vendor_col else "''"
-        source_expr   = source_col if source_col else "''"
-        url_expr      = url_col if url_col else "''"
-
-        since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(timespec="seconds")
-
-        q = f"""
-            SELECT
-              COALESCE({vendor_expr}, '') AS vendor,
-              {head_col} AS headline,
-              COALESCE(risk_type,'') AS risk_type,
-              {severity_expr} AS severity,
-              COALESCE({source_expr}, '') AS source,
-              COALESCE({url_expr}, '') AS url,
-              {published_col} AS published
-            FROM news_events
-            WHERE {published_col} >= ?
-            ORDER BY {published_col} DESC
-            LIMIT 20
-        """
-        rows = list(con.execute(q, (since,)))
+        rows = list(con.execute(q))
+    finally:
         con.close()
 
-        if not rows:
-            print("[alerts] no rows to alert in last 24h")
-            return
+    if not rows:
+        print(f"[{ts()}] [alerts] no rows in last 24h")
+        return
 
-        sev_emoji = {"Critical": "🟥", "High": "🟧"}
-        lines = ["*New vendor risk items (last 24h):*",""]
-        for r in rows:
-            sev = (r["severity"] or "").strip()
-            emoji = sev_emoji.get(sev, "🟦") if sev else "🟦"
-            risk = r["risk_type"] or "—"
-            vendor = r["vendor"] or "—"
-            lines.append(f"{emoji} *{vendor}* | {risk} {f'({sev})' if sev else ''} — {r['source']}")
-            lines.append(r["headline"])
-            if r["url"]:
-                lines.append(r["url"])
-            lines.append("")
-        msg = "\n".join(lines)
-        print(msg)
-        post_slack(msg)
+    lines = ["*New vendor risk items (last 24h):*",""]
+    for r in rows:
+        vendor = r["vendor"] or "—"
+        risk   = r["risk"]
+        lines.append(f"🟦 *{vendor}* | {risk}  — {r['source']}\n{r['title']}\n{r['url']}")
+        lines.append("")
+    text = "\n".join(lines).strip()
+    print(f"[{ts()}] [alerts] sending {len(rows)} items")
+    slack(text)
 
-    except Exception as e:
-        print(f"[alerts] query failed: {e}")
+def cycle():
+    print(f"[{ts()}] cycle start")
+    if BACKUP_SCRIPT.exists(): run([sys.executable, str(BACKUP_SCRIPT)])
+    else: print(f"[{ts()}] [warn] no {BACKUP_SCRIPT}")
 
-def main():
-    while True:
-        print(f"[{iso_utc()}] cycle start")
-        backup_db()
-        run_ingest_cycle()
-        send_alerts()
-        print(f"[{iso_utc()}] cycle complete")
-        if os.getenv("SCHEDULER_ONESHOT","0") == "1":
-            break
-        time.sleep(SLEEP_SECONDS)
+    if INGEST.exists(): run([sys.executable, str(INGEST)])
+    else: print(f"[{ts()}] [warn] no {INGEST}")
+
+    if TAG.exists(): run([sys.executable, str(TAG)])
+    else: print(f"[{ts()}] [warn] no {TAG}")
+
+    alert_new_rows()
+    print(f"[{ts()}] cycle complete")
 
 if __name__ == "__main__":
-    main()
+    if os.getenv("SCHEDULER_ONESHOT",""):
+        cycle()
+    else:
+        while True:
+            cycle()
+            time.sleep(6*60*60)

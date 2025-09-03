@@ -1,0 +1,5 @@
+nohup: ignoring input
+C:\Users\ateet\Desktop\semicon-risk-vendor-platform\scripts\backup_db.py:4: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  ts = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+[OK] Backup -> backups/news-2025-09-03.db
+[tag] updated 0 fields
